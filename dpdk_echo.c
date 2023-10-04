@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <rte_cycles.h>
 #include <rte_eal.h>
@@ -9,6 +10,8 @@
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
 #include <rte_udp.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 
 #define RX_RING_SIZE 128
 #define TX_RING_SIZE 128
@@ -339,7 +342,15 @@ static int run_server()
 {
 	uint8_t port = dpdk_port;
 	struct rte_mbuf *rx_bufs[BURST_SIZE];
-	uint16_t nb_rx;
+	struct rte_mbuf *buf;
+	struct rte_mbuf *return_buf;
+	char *buf_ptr;
+	uint16_t nb_rx, nb_tx;
+	struct rte_ether_hdr *eth_hdr;
+	struct rte_ipv4_hdr *ipv4_hdr;
+	struct rte_ipv4_hdr *rx_ipv4_hdr;
+	struct rte_udp_hdr *rte_udp_hdr;
+
 
 	printf("\nCore %u running in server mode. [Ctrl+C to quit]\n",
 			rte_lcore_id());
@@ -353,8 +364,114 @@ static int run_server()
 			continue;
 
 		printf("received a packet!\n");
+		
+		
 
 		/* TODO: YOUR CODE HERE */
+		for(int i=0; i<nb_rx; i++){
+		 printf("Buffer value received\n"); 
+		 buf = rte_pktmbuf_alloc(tx_mbuf_pool);
+
+		 if (buf == NULL)
+			printf("error allocating buffer\n");
+
+		 buf = rx_bufs[i];
+		 //rte_pktmbuf_dump(stdout, buf, 64);
+
+		 printf("Ethernet parsing\n");
+		 return_buf = rte_pktmbuf_alloc(tx_mbuf_pool);
+
+		 if (return_buf == NULL)
+			printf("error allocating return buffer\n");
+
+		/* ethernet header */
+		buf_ptr = rte_pktmbuf_append(return_buf, RTE_ETHER_HDR_LEN);
+		eth_hdr = (struct rte_ether_hdr *) buf_ptr;
+
+		struct rte_ether_hdr *ptr_mac_hdr;
+
+		ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
+
+		rte_ether_addr_copy(&ptr_mac_hdr->dst_addr, &eth_hdr->src_addr);
+		rte_ether_addr_copy(&ptr_mac_hdr->src_addr, &eth_hdr->dst_addr);
+		eth_hdr->ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
+
+		printf("Ethernet headers prepared\n");
+
+		/* IPv4 header */
+		buf_ptr = rte_pktmbuf_append(return_buf, sizeof(struct rte_ipv4_hdr));
+		ipv4_hdr = (struct rte_ipv4_hdr *) buf_ptr;
+		ipv4_hdr->version_ihl = 0x45;
+		ipv4_hdr->type_of_service = 0;
+		ipv4_hdr->total_length = rte_cpu_to_be_16(sizeof(struct rte_ipv4_hdr) +
+				sizeof(struct rte_udp_hdr) + payload_len);
+		ipv4_hdr->packet_id = 0;
+		ipv4_hdr->fragment_offset = 0;
+		ipv4_hdr->time_to_live = 64;
+		ipv4_hdr->next_proto_id = IPPROTO_UDP;
+		ipv4_hdr->hdr_checksum = 0;
+
+		rx_ipv4_hdr = rte_pktmbuf_mtod_offset(buf, struct rte_ipv4_hdr *,RTE_ETHER_HDR_LEN);
+
+		ipv4_hdr->src_addr = rx_ipv4_hdr->dst_addr;
+		ipv4_hdr->dst_addr = rx_ipv4_hdr->src_addr;
+
+		struct in_addr ip_addr;
+    	ip_addr.s_addr = ipv4_hdr->dst_addr;
+        const char* dst_ip=inet_ntoa(ip_addr);
+		printf("Result of Dest IP\n");
+		printf("%s\n", dst_ip);
+
+		ip_addr.s_addr = ipv4_hdr->src_addr;
+        const char* src_ip=inet_ntoa(ip_addr);
+		printf("Result of Src IP\n");
+		printf("%s\n", src_ip);
+
+		printf("IPV4 headers prepared\n");
+
+		/* UDP header + fake data */
+		buf_ptr = rte_pktmbuf_append(return_buf,
+				sizeof(struct rte_udp_hdr) + payload_len);
+		rte_udp_hdr = (struct rte_udp_hdr *) buf_ptr;
+		rte_udp_hdr->src_port = rte_cpu_to_be_16(server_port);
+		rte_udp_hdr->dst_port = rte_cpu_to_be_16(client_port);
+		rte_udp_hdr->dgram_len = rte_cpu_to_be_16(sizeof(struct rte_udp_hdr)
+				+ payload_len);
+		rte_udp_hdr->dgram_cksum = 0;
+		memset(buf_ptr + sizeof(struct rte_udp_hdr), 0xAB, payload_len);
+		printf("UDP Headers complete\n");
+
+		// rte_udp_hdr = rte_pktmbuf_mtod_offset(buf, struct rte_udp_hdr *,
+		// 				RTE_ETHER_HDR_LEN + sizeof(struct rte_ipv4_hdr));
+		// rte_udp_hdr->src_port = rte_cpu_to_be_16(server_port);
+		// rte_udp_hdr->dst_port = rte_cpu_to_be_16(client_port);
+
+
+		return_buf->l2_len = RTE_ETHER_HDR_LEN;
+		return_buf->l3_len = sizeof(struct rte_ipv4_hdr);
+		return_buf->ol_flags = RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_IPV4;
+
+		printf("Flags set complete\n");
+
+		printf("Received packet\n");
+		rte_pktmbuf_dump(stdout, buf, 64);
+
+		printf("Sent packet\n");
+		rte_pktmbuf_dump(stdout, return_buf, 64);
+		
+		/* send packet */
+		nb_tx = rte_eth_tx_burst(port, 0, &return_buf, 1);
+
+		if (unlikely(nb_tx != 1)) {
+			printf("error: could not send packet\n");
+		}
+		printf("Packet sent\n");
+
+		rte_pktmbuf_free(buf);
+		rte_pktmbuf_free(return_buf);
+
+		}
+		
 		
 	}
 
