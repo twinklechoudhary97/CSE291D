@@ -1,6 +1,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <rte_cycles.h>
 #include <rte_eal.h>
@@ -340,6 +341,7 @@ static int run_server()
 	uint8_t port = dpdk_port;
 	struct rte_mbuf *rx_bufs[BURST_SIZE];
 	uint16_t nb_rx;
+	struct rte_mbuf *buf;
 
 	printf("\nCore %u running in server mode. [Ctrl+C to quit]\n",
 			rte_lcore_id());
@@ -355,6 +357,10 @@ static int run_server()
 		printf("received a packet!\n");
 
 		/* TODO: YOUR CODE HERE */
+		for(i=0; i<nb_rx;i++){
+			buf = bufs[i];
+			rte_pktmbuf_dump(stdout, buf, 64);
+		}
 		
 	}
 
