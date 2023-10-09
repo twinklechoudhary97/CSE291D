@@ -420,7 +420,7 @@ static int run_server()
 		if (unlikely(nb_tx != 1)) {
 			printf("error: could not send packet\n");
 		}
-		// rte_pktmbuf_free(buf);
+		rte_pktmbuf_free(buf);
 	    rte_pktmbuf_free(new_buf);
 
 		}
